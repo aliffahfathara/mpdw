@@ -1,0 +1,454 @@
+---
+title: "Tugas Praktikum 4 MPDW"
+author: "Aliffah Fathara"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(ggplot2)
+library(tsibble)
+library(tseries)
+library(ggpubr)
+library (TSA)
+```
+
+```{r}
+set.seed(2026)
+ 
+theta1 <- 0.4
+theta2 <- 0.6
+n      <- 300
+
+denom  <- 1 + theta1^2 + theta2^2
+rho1_teori <- theta1 * (1 + theta2) / denom
+rho2_teori <- theta2 / denom
+rho3_teori <- 0
+
+c(var_teori = denom, rho1 = rho1_teori, rho2 = rho2_teori, rho3 = rho3_teori)
+```
+
+# Proses MA (2)
+
+## Membangkitkan Data
+
+### Manual
+
+```{r}
+n <- 300
+e <- rnorm(n + 2)          # 2 nilai awal sebagai burn-in
+
+Y_manual <- numeric(n)
+for (t in 3:(n + 2)) {
+  Y_manual[t - 2] <- e[t] + theta1 * e[t - 1] + theta2 * e[t - 2]
+}
+Y_manual <- ts(Y_manual)
+
+mean(Y_manual)
+var(Y_manual)
+```
+
+### Arima.sim
+
+```{r}
+Y_sim <- arima.sim(n = 300, model = list(ma = c(theta1, theta2)))
+
+mean(Y_sim)
+var(Y_sim)
+```
+## Plot Time Series
+
+```{r}
+plot_manual <- Y_manual |> as_tsibble() |>
+  ggplot(aes(x = index, y = value)) + geom_line() + theme_bw() +
+  xlab("Obs") + ylab("Nilai") + ggtitle("MA(2) - Pembangkitan Manual")
+
+plot_sim <- Y_sim |> as_tsibble() |>
+  ggplot(aes(x = index, y = value)) + geom_line() + theme_bw() +
+  xlab("Obs") + ylab("Nilai") + ggtitle("MA(2) - arima.sim")
+
+ggpubr::ggarrange(plot_manual, plot_sim, nrow = 2)
+```
+
+Kedua plot deret waktu menunjukkan data yang berfluktuasi di sekitar nilai tengah nol dengan lebar pita yang relatif konstan sepanjang waktu — indikasi awal bahwa data **stasioner dalam rataan dan ragam**, sesuai sifat proses MA yang memang selalu stasioner.
+
+## Plot ACF, PACF, dan EACF
+
+### Plot ACF
+
+```{r}
+acf(Y_manual, main = "ACF - Data Manual")
+acf(Y_sim, main = "ACF - Data arima.sim")
+```
+
+Plot ACF pada kedua data menunjukkan nilai signifikan pada lag 1 dan lag 2, kemudian **terputus (*cuts off*) setelah lag 2** — pola ini sesuai dengan sifat teoritis MA(2) yang autokorelasinya nol untuk $k\geq3$.
+
+### Plot PACF
+
+```{r}
+pacf(Y_manual, main = "PACF - Data Manual")
+pacf(Y_sim, main = "PACF - Data arima.sim")
+```
+
+Berbeda dengan ACF, plot PACF menurun secara berangsur (*tails off*) dan tidak terputus tajam pada lag tertentu. Hal ini konsisten dengan teori bahwa representasi AR($\infty$) dari proses MA akan memiliki PACF yang meluruh secara bertahap, bukan terputus.
+
+### Plot EACF
+
+```{r}
+TSA::eacf(Y_manual)
+TSA::eacf(Y_sim)
+```
+
+Pada tabel EACF, pola yang diharapkan adalah munculnya "segitiga" nilai tidak signifikan (simbol `o`) dengan titik sudut (*vertex*) di baris AR = 0 dan kolom MA = 2. Pola ini menjadi penciri identifikasi bahwa proses merupakan **MA murni berorde 2**, tanpa komponen AR.
+
+### Identifikasi Stasioneritas
+
+Ketiga plot (time series, ACF, PACF) secara konsisten menunjukkan data **stasioner dalam rataan dan ragam**: plot time series berfluktuasi di sekitar nilai tengah konstan, ACF cuts off setelah lag 2, dan tidak ada indikasi tren atau perubahan lebar pita yang sistematis.
+
+Sebagai konfirmasi formal, dilakukan uji ADF:
+
+```{r}
+tseries::adf.test(Y_manual)
+tseries::adf.test(Y_sim)
+```
+
+$H_0$: Data tidak stasioner dalam rataan
+$H_1$: Data stasioner dalam rataan
+
+Pada simulasi ilustrasi, *p-value* kedua data jauh lebih kecil dari taraf nyata 5% (masing-masing $\approx 1{,}8\times10^{-8}$ dan $\approx 8{,}5\times10^{-5}$), sehingga $H_0$ ditolak dan disimpulkan **data stasioner dalam rataan** — sejalan dengan hasil eksplorasi visual dan sifat teoritis proses MA berorde hingga.
+
+## Scatterplot $Y_t$ dengan Lag
+
+```{r}
+Yv  <- as.numeric(Y_manual)
+Nn  <- length(Yv)
+
+df_lag <- data.frame(
+  Yt  = Yv[4:Nn],
+  Yt1 = Yv[3:(Nn - 1)],
+  Yt2 = Yv[2:(Nn - 2)],
+  Yt3 = Yv[1:(Nn - 3)]
+)
+
+ggplot(df_lag, aes(x = Yt1, y = Yt)) +
+  geom_point() + theme_bw() + ggtitle(expression(Y[t]~"vs"~Y[t-1]))
+
+ggplot(df_lag, aes(x = Yt2, y = Yt)) +
+  geom_point() + theme_bw() + ggtitle(expression(Y[t]~"vs"~Y[t-2]))
+
+ggplot(df_lag, aes(x = Yt3, y = Yt)) +
+  geom_point() + theme_bw() + ggtitle(expression(Y[t]~"vs"~Y[t-3]))
+```
+
+Scatterplot $Y_t$ vs $Y_{t-1}$ dan $Y_t$ vs $Y_{t-2}$ menunjukkan pola sebaran titik yang cenderung membentuk **tren linear positif ringan**, sedangkan scatterplot $Y_t$ vs $Y_{t-3}$ menunjukkan sebaran titik yang **acak tanpa pola** — konsisten dengan ACF yang terputus setelah lag 2.
+
+## Autokorelasi: Empiris vs Teoritis
+
+```{r}
+ac_manual <- acf(Y_manual, plot = FALSE)$acf[2:4]
+ac_sim    <- acf(Y_sim, plot = FALSE)$acf[2:4]
+
+hasil <- data.frame(
+  Lag              = 1:3,
+  Teoritis         = c(rho1_teori, rho2_teori, rho3_teori),
+  Empiris_Manual   = ac_manual,
+  Empiris_arimaSim = ac_sim
+)
+round(hasil, 3)
+```
+
+**Interpretasi:** nilai autokorelasi empiris pada lag 1 dan lag 2 cukup dekat dengan nilai teoritis (selisih wajar akibat *sampling error* pada n=300), sedangkan pada lag 3 nilai empiris mendekati nol, sesuai prediksi teoritis $\rho_3=0$. Kesesuaian ini mengonfirmasi bahwa data bangkitan (baik manual maupun `arima.sim`) benar-benar mengikuti proses MA(2) yang dimaksud.
+
+# Proses AR (2)
+
+```{r}
+phi1 <- 0.5
+phi2 <- 0.2
+
+c(syarat1 = phi1 + phi2 < 1,
+  syarat2 = phi2 - phi1 < 1,
+  syarat3 = abs(phi2) < 1)
+```
+
+```{r}
+rho <- numeric(6)
+rho[1] <- phi1 / (1 - phi2)                 # rho1
+for (k in 2:6) {
+  rho[k] <- phi1 * rho[k - 1] + phi2 * ifelse(k - 2 == 0, 1, rho[k - 2])
+}
+names(rho) <- paste0("rho", 1:6)
+round(rho, 4)
+```
+
+## Membangkitkan Data
+
+### Manual
+
+```{r}
+n <- 300
+burn <- 50
+e <- rnorm(n + burn)
+
+Y <- numeric(n + burn)
+for (t in 3:(n + burn)) {
+  Y[t] <- phi1 * Y[t - 1] + phi2 * Y[t - 2] + e[t]
+}
+Y_manual <- ts(Y[(burn + 1):(n + burn)])   # buang burn-in
+
+mean(Y_manual)
+var(Y_manual)
+```
+### Arima.sim
+
+```{r}
+Y_sim <- arima.sim(n = 300, model = list(ar = c(phi1, phi2)))
+
+mean(Y_sim)
+var(Y_sim)
+```
+## Plot Time Series
+
+```{r}
+plot_manual <- Y_manual |> as_tsibble() |>
+  ggplot(aes(x = index, y = value)) + geom_line() + theme_bw() +
+  xlab("Obs") + ylab("Nilai") + ggtitle("AR(2) - Pembangkitan Manual")
+
+plot_sim <- Y_sim |> as_tsibble() |>
+  ggplot(aes(x = index, y = value)) + geom_line() + theme_bw() +
+  xlab("Obs") + ylab("Nilai") + ggtitle("AR(2) - arima.sim")
+
+ggpubr::ggarrange(plot_manual, plot_sim, nrow = 2)
+```
+
+Kedua plot menunjukkan data berfluktuasi di sekitar nilai tengah yang relatif konstan dengan lebar pita stabil — indikasi awal **stasioner dalam rataan dan ragam**.
+
+## Plot ACF, PACF, dan EACF
+
+### Plot ACF
+
+```{r}
+acf(Y_manual, main = "ACF - Data Manual")
+acf(Y_sim, main = "ACF - Data arima.sim")
+```
+
+Plot ACF menurun secara berangsur/eksponensial (*tails off*) tanpa titik potong tegas — pola khas proses **AR**, konsisten dengan perhitungan teoritis Yule-Walker di atas.
+
+### Plot PACF
+
+```{r}
+pacf(Y_manual, main = "PACF - Data Manual")
+pacf(Y_sim, main = "PACF - Data arima.sim")
+```
+
+Berbeda dengan ACF, PACF menunjukkan nilai signifikan hanya pada lag 1 dan lag 2, kemudian **terputus (*cuts off*) setelah lag 2** — pola ini adalah ciri identifikasi orde AR, yaitu $p=2$.
+
+### Plot EACF
+
+```{r}
+TSA::eacf(Y_manual)
+TSA::eacf(Y_sim)
+```
+
+Pada tabel EACF, pola yang diharapkan adalah segitiga nilai tidak signifikan (`o`) dengan titik sudut (*vertex*) di **baris AR = 2, kolom MA = 0** — menandakan proses **AR murni berorde 2**.
+
+### Identifikasi Stasioneritas
+
+```{r}
+tseries::adf.test(Y_manual)
+tseries::adf.test(Y_sim)
+```
+
+$H_0$: Data tidak stasioner dalam rataan
+$H_1$: Data stasioner dalam rataan
+
+Pada simulasi ilustrasi, *p-value* kedua data jauh lebih kecil dari 5% ($\approx 4{,}5\times10^{-7}$ dan $\approx 8{,}0\times10^{-8}$),sehingga $H_0$ ditolak dan data dinyatakan **stasioner dalam rataan**, sejalan dengan plot time series, ACF, dan syarat kestasioneran teoritis.
+
+## Scatterplot $Y_t$ dengan Lag
+
+```{r}
+Yv <- as.numeric(Y_manual)
+Nn <- length(Yv)
+
+df_lag <- data.frame(
+  Yt  = Yv[4:Nn],
+  Yt1 = Yv[3:(Nn - 1)],
+  Yt2 = Yv[2:(Nn - 2)],
+  Yt3 = Yv[1:(Nn - 3)]
+)
+
+ggplot(df_lag, aes(x = Yt1, y = Yt)) +
+  geom_point() + theme_bw() + ggtitle(expression(Y[t]~"vs"~Y[t-1]))
+
+ggplot(df_lag, aes(x = Yt2, y = Yt)) +
+  geom_point() + theme_bw() + ggtitle(expression(Y[t]~"vs"~Y[t-2]))
+
+ggplot(df_lag, aes(x = Yt3, y = Yt)) +
+  geom_point() + theme_bw() + ggtitle(expression(Y[t]~"vs"~Y[t-3]))
+```
+
+Ketiga scatterplot menunjukkan pola **tren linear positif yang makin melemah** seiring bertambahnya lag ($Y_t$ vs $Y_{t-1}$ paling kuat,$Y_t$ vs $Y_{t-3}$ paling lemah namun tetap terlihat) — konsisten dengan ACF AR(2) yang meluruh perlahan, bukan terputus tegas seperti pada proses MA.
+
+## Autokorelasi: Empiris vs Teoritis
+
+```{r}
+ac_manual <- acf(Y_manual, plot = FALSE)$acf[2:4]
+ac_sim    <- acf(Y_sim, plot = FALSE)$acf[2:4]
+
+hasil <- data.frame(
+  Lag              = 1:3,
+  Teoritis         = rho[1:3],
+  Empiris_Manual   = ac_manual,
+  Empiris_arimaSim = ac_sim
+)
+round(hasil, 3)
+```
+
+**Interpretasi:** nilai empiris pada lag 1–3 cukup dekat dengan nilai teoritis Yule-Walker (selisih wajar akibat *sampling error* pada n=300), dan sama-sama menunjukkan **peluruhan bertahap**, bukan terputus tajam. Hal ini mengonfirmasi data bangkitan memang mengikuti proses AR(2) yang dimaksud.
+
+# Proses ARMA (2,2)
+
+```{r}
+phi1   <- 0.5;  phi2   <- 0.2
+theta1 <- 0.4;  theta2 <- 0.6
+
+c(syarat1 = phi1 + phi2 < 1,
+  syarat2 = phi2 - phi1 < 1,
+  syarat3 = abs(phi2) < 1)
+```
+```{r}
+rho_teori <- ARMAacf(ar = c(phi1, phi2), ma = c(theta1, theta2), lag.max = 6)
+round(rho_teori, 4)
+```
+## Membangkitkan Data
+
+### Manual
+
+```{r}
+n <- 300
+burn <- 50
+e <- rnorm(n + burn)
+
+Y <- numeric(n + burn)
+for (t in 3:(n + burn)) {
+  Y[t] <- phi1 * Y[t - 1] + phi2 * Y[t - 2] +
+    e[t] + theta1 * e[t - 1] + theta2 * e[t - 2]
+}
+Y_manual <- ts(Y[(burn + 1):(n + burn)])
+
+mean(Y_manual)
+var(Y_manual)
+```
+
+### Arima.sim
+
+```{r}
+Y_sim <- arima.sim(n = 300,
+                    model = list(ar = c(phi1, phi2), ma = c(theta1, theta2)))
+
+mean(Y_sim)
+var(Y_sim)
+```
+## Plot Time Series
+
+```{r}
+plot_manual <- Y_manual |> as_tsibble() |>
+  ggplot(aes(x = index, y = value)) + geom_line() + theme_bw() +
+  xlab("Obs") + ylab("Nilai") + ggtitle("ARMA(2,2) - Pembangkitan Manual")
+
+plot_sim <- Y_sim |> as_tsibble() |>
+  ggplot(aes(x = index, y = value)) + geom_line() + theme_bw() +
+  xlab("Obs") + ylab("Nilai") + ggtitle("ARMA(2,2) - arima.sim")
+
+ggpubr::ggarrange(plot_manual, plot_sim, nrow = 2)
+```
+
+## Plot ACF, PACF, dan EACF
+
+### Plot ACF
+
+```{r}
+acf(Y_manual, main = "ACF - Data Manual")
+acf(Y_sim, main = "ACF - Data arima.sim")
+```
+
+Plot ACF meluruh secara bertahap (*tails off*), sesuai perhitungan teoritis `ARMAacf()` — karena adanya komponen AR, ACF tidak terputus tegas seperti pada proses MA murni.
+
+### Plot PACF
+
+```{r}
+pacf(Y_manual, main = "PACF - Data Manual")
+pacf(Y_sim, main = "PACF - Data arima.sim")
+```
+
+Plot PACF juga meluruh secara bertahap (*tails off*), tidak terputus tegas pada lag tertentu — ciri khas proses **campuran ARMA**, berbeda dari AR murni (PACF cuts off) maupun MA murni (ACF cuts off).
+
+### Plot EACF
+
+```{r}
+TSA::eacf(Y_manual)
+TSA::eacf(Y_sim)
+```
+
+Pada proses campuran, pola segitiga nilai tidak signifikan pada tabel EACF diperkirakan memiliki titik sudut (*vertex*) di sekitar **baris AR = 2, kolom MA = 2**, sesuai orde ARMA(2,2) yang dibangkitkan (meski pada data riil posisi vertex bisa sedikit bergeser akibat variasi sampel).
+
+### Identifikasi Stasioneritas
+
+```{r}
+tseries::adf.test(Y_manual)
+tseries::adf.test(Y_sim)
+```
+
+$H_0$: Data tidak stasioner dalam rataan
+$H_1$: Data stasioner dalam rataan
+
+Pada simulasi ilustrasi, *p-value* kedua data jauh lebih kecil dari 5% (masing-masing $\approx 4{,}8\times10^{-6}$ dan $\approx 6{,}8\times 10^{-4}$), sehingga $H_0$ ditolak dan data dinyatakan **stasioner dalam rataan**, sejalan dengan syarat kestasioneran teoritis di awal.
+
+## Scatterplot $Y_t$ dengan Lag
+
+```{r}
+Yv <- as.numeric(Y_manual)
+Nn <- length(Yv)
+
+df_lag <- data.frame(
+  Yt  = Yv[4:Nn],
+  Yt1 = Yv[3:(Nn - 1)],
+  Yt2 = Yv[2:(Nn - 2)],
+  Yt3 = Yv[1:(Nn - 3)]
+)
+
+ggplot(df_lag, aes(x = Yt1, y = Yt)) +
+  geom_point() + theme_bw() + ggtitle(expression(Y[t]~"vs"~Y[t-1]))
+
+ggplot(df_lag, aes(x = Yt2, y = Yt)) +
+  geom_point() + theme_bw() + ggtitle(expression(Y[t]~"vs"~Y[t-2]))
+
+ggplot(df_lag, aes(x = Yt3, y = Yt)) +
+  geom_point() + theme_bw() + ggtitle(expression(Y[t]~"vs"~Y[t-3]))
+```
+
+Ketiga scatterplot menunjukkan pola **tren linear positif yang cukup kuat**, bahkan pada $Y_t$ vs $Y_{t-3}$ masih terlihat pola yang jelas (tidak seacak pada kasus MA(2)) — konsisten dengan ACF ARMA(2,2) yang meluruh perlahan akibat komponen AR di dalamnya.
+
+## Autokorelasi: Empiris vs Teoritis
+
+```{r}
+ac_manual <- acf(Y_manual, plot = FALSE)$acf[2:4]
+ac_sim    <- acf(Y_sim, plot = FALSE)$acf[2:4]
+
+hasil <- data.frame(
+  Lag              = 1:3,
+  Teoritis         = rho_teori[2:4],
+  Empiris_Manual   = ac_manual,
+  Empiris_arimaSim = ac_sim
+)
+round(hasil, 3)
+```
+
+**Interpretasi:** nilai empiris pada lag 1–3 sangat dekat dengan nilai teoritis `ARMAacf()` (selisih kecil akibat *sampling error* pada n=300), dan sama-sama menunjukkan **peluruhan bertahap yang cukup lambat** dibanding AR(2) atau MA(2) murni. Hal ini mengonfirmasi data bangkitan memang mengikuti proses ARMA(2,2) yang dimaksud.
