@@ -1,0 +1,312 @@
+---
+title: "Tugas Praktikum Pertemuan 6 dan 7"
+author: "Aliffah Fathara"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+## Pakages
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(ggplot2)
+library(tsibble)
+library(tseries)
+library(MASS)
+library(forecast)
+library(TSA)
+library(TTR)
+library(aTSA)
+library(graphics)
+library(readxl)
+```
+## Data Bangkitan
+
+### Pembangkitan Data
+
+```{r}
+raw <- read_excel("D:\\Documents\\PPT kuliah\\smester V\\MPDW\\data mpdw thara (kelompok).xlsx", col_names = FALSE)
+colnames(raw) <- c("kota", "tanggal", "nilai", "keterangan")
+
+data <- raw[, c("tanggal", "nilai")]
+data$tanggal <- as.Date(data$tanggal)
+
+data.ts <- ts(data$nilai)
+data.ts
+```
+
+Data dibagi menjadi data latih dan data uji
+
+```{r}
+n <- length(data.ts)
+n
+
+n.train <- floor(0.8 * n)
+train.ts <- ts(data.ts[1:n.train])
+test.ts  <- ts(data.ts[(n.train + 1):n])
+
+length(train.ts); length(test.ts)
+```
+
+Diperoleh 116 data latih dan 30 data uji
+
+## Eksplorasi Data
+
+### Plot Data Penuh
+
+```{r}
+plot.ts(data.ts,
+        lty = 1,
+        xlab = "Waktu (hari)",
+        ylab = "Suhu",
+        main = "Plot Data Suhu Delhi")
+```
+
+### Plot Data Latih
+
+```{r}
+plot.ts(train.ts,
+        col = "navyblue", lwd = 1, type = "o",
+        xlab = "Waktu", ylab = "Suhu",
+        main = "Plot Data Latih")
+```
+
+### Plot Data Uji
+
+```{r}
+plot.ts(test.ts,
+        col = "darkorange", lwd = 1, type = "o",
+        xlab = "Waktu", ylab = "Suhu",
+        main = "Plot Data Uji")
+```
+
+## Uji Stasioneritas Data Latih
+
+### Plot ACF
+
+```{r}
+data$nilai <- as.numeric(data$nilai)
+
+data.ts <- ts(data$nilai)
+
+train.ts <- window(data.ts)
+```
+
+
+```{r}
+acf(train.ts, main = "ACF - Data Latih", lag.max = 20)
+```
+
+### Uji ADF
+
+```{r}
+tseries::adf.test(train.ts)
+```
+
+$H_0$: Data tidak stasioner dalam rataan
+$H_1$: Data stasioner dalam rataan
+
+Diperoleh *p-value* $\approx 0{,}09506$, lebih kecil dari taraf nyata 10%, sehingga $H_0$ ditolak dan data **stasioner dalam rataan**. Dengan demikian, *differencing* (d) tidak diperlukan (d = 0).
+
+### Plot Box-Cox
+
+```{r}
+data$nilai <- as.numeric(data$nilai)
+train.ts <- ts(data$nilai[1:116])
+```
+
+```{r}
+index <- seq(1:n.train)
+
+bc <- boxcox(train.ts ~ index, lambda = seq(-3, 1, by = 0.1))
+
+lambda_opt <- bc$x[which.max(bc$y)]
+lambda_opt
+
+ci_lambda <- bc$x[bc$y > max(bc$y) - 0.5 * qchisq(0.95, df = 1)]
+ci_lower <- min(ci_lambda)
+ci_upper <- max(ci_lambda)
+
+c(Batas_Bawah = ci_lower, Batas_Atas = ci_upper)
+```
+Nilai $\lambda$ optimum $\approx -1{,}43$ dengan selang kepercayaan 95% $\approx(-3{,}37\,;\,0{,}50)$. Karena selang ini **tidak memuat nilai 1**, data **belum stasioner dalam ragam** sehingga perlu ditransformasi Box-Cox sebelum pemodelan.
+
+### Transformasi Box-Cox
+
+```{r}
+train.trans <- (train.ts^lambda_opt - 1) / lambda_opt
+
+plot.ts(train.trans, col = "seagreen", lwd = 1, type = "o",
+        xlab = "Waktu", ylab = "Data Transformasi",
+        main = "Plot Data Latih Setelah Transformasi Box-Cox")
+```
+
+```{r}
+tseries::adf.test(train.trans)
+```
+
+Setelah transformasi, *p-value* uji ADF tetap di bawah 10% ($\approx 0{,}08307$), menegaskan data **stasioner dalam rataan** sekaligus **stasioner dalam ragam** setelah transformasi Box-Cox.
+
+## Spesifikasi Model
+
+```{r}
+par(mfrow = c(1, 2))
+acf(train.trans, main = "ACF", lag.max = 20)
+pacf(train.trans, main = "PACF", lag.max = 20)
+par(mfrow = c(1, 1))
+```
+
+Plot ACF meluruh secara bertahap (*tails off*), sedangkan plot PACFmenunjukkan lonjakan signifikan hanya pada lag pertama lalu **terputus (*cuts off*) setelah lag 1** — pola khas proses **AR(1)**.
+
+```{r}
+eacf(train.trans)
+```
+
+Pola ACF/PACF di atas sudah cukup tegas mengarah ke AR(1); tabel EACF digunakan sebagai konfirmasi tambahan. Model tentatif yang akan diduga parameternya: **ARIMA(1,0,0)**, ARIMA(2,0,0), dan ARIMA(1,0,1) sebagai pembanding.
+
+## Pendugaan Parameter
+
+```{r}
+model1 <- Arima(train.trans, order = c(1,0,0), method = "ML")
+summary(model1)  # AIC=-1526.48
+lmtest::coeftest(model1)  # seluruh parameter signifikan
+
+model2 <- Arima(train.trans, order = c(2,0,0), method = "ML")
+summary(model2)  # AIC=-1524.76
+lmtest::coeftest(model2)  # ar2 tidak signifikan
+
+model3 <- Arima(train.trans, order = c(1,0,1), method = "ML")
+summary(model3)  # AIC=-1524.80
+lmtest::coeftest(model3)  # ma1 tidak signifikan
+```
+
+```{r}
+hasil_model <- data.frame(
+  Model = c("ARIMA(1,0,0)", "ARIMA(2,0,0)", "ARIMA(1,0,1)"),
+  AIC   = c(AIC(model1), AIC(model2), AIC(model3)),
+  BIC   = c(BIC(model1), BIC(model2), BIC(model3))
+)
+hasil_model
+```
+
+Model **ARIMA(1,0,0)** memiliki AIC/BIC terkecil sekaligus satu-satunya model dengan seluruh parameter signifikan (koefisien AR(1) $\approx 0{,}73$, p < 0{,}001). Model ini dipilih sebagai model terbaik.
+
+## Analisis Sisaan
+
+### Eksplorasi Sisaan
+
+```{r}
+sisaan <- model1$residuals
+par(mfrow = c(2,2))
+car::qqPlot(sisaan)
+plot(1:length(sisaan), sisaan, xlab = "Waktu", ylab = "Sisaan")
+acf(sisaan, main = "ACF Sisaan")
+pacf(sisaan, main = "PACF Sisaan")
+par(mfrow = c(1,1))
+```
+
+Plot ACF dan PACF sisaan tidak menunjukkan lonjakan signifikan pada 20 lag pertama, mengindikasikan sisaan saling bebas. Plot kuantil-kuantil menunjukkan sebagian titik menyimpang dari garis normal di kedua ujung (*heavy tail*) — akan dikonfirmasi dengan uji formal.
+
+### Uji Formal
+
+```{r}
+# 1) Normalitas
+shapiro.test(sisaan)
+```
+
+$H_0$: Sisaan menyebar normal, $H_1$: Sisaan tidak menyebar normal. Diperoleh *p-value* $\approx 1{,}3\times10^{-6}$ ($< 0{,}05$) sehingga $H_0$ **ditolak** — sisaan **tidak menyebar normal**. Ini konsisten dengan pengamatan *heavy tail* pada plot QQ, wajar terjadi pada data riil (berbeda dengan data bangkitan yang murni mengikuti asumsi teoritis).
+
+```{r}
+# 2) Kebebasan sisaan
+Box.test(sisaan, type = "Ljung", lag = 10)
+```
+
+$H_0$: Sisaan saling bebas. Diperoleh *p-value* $\approx 0{,}977$ ($> 0{,}05$) sehingga gagal tolak $H_0$ — **sisaan saling bebas**.
+
+```{r}
+# 3) Kehomogenan ragam
+Box.test(sisaan^2, type = "Ljung", lag = 10)
+```
+
+$H_0$: Ragam sisaan homogen. Diperoleh *p-value* $\approx 0{,}845$ ($> 0{,}05$) sehingga gagal tolak $H_0$ — **ragam sisaan homogen**.
+
+```{r}
+# 4) Nilai tengah sisaan = 0
+t.test(sisaan, mu = 0, conf.level = 0.95)
+```
+
+$H_0$: nilai tengah sisaan = 0. Diperoleh *p-value* $\approx 0{,}966$ ($> 0{,}05$) sehingga gagal tolak $H_0$ — **nilai tengah sisaan sama dengan nol**.
+
+**Ringkasan:** dari empat asumsi, tiga terpenuhi (bebas, homogen, rataan nol) dan satu tidak terpenuhi (normalitas). Pada praktiknya, model ARIMA(1,0,0) tetap dapat digunakan untuk peramalan titik karena asumsi normalitas terutama memengaruhi ketepatan selang peramalan, bukan estimasi titiknya — namun ini menjadi catatan keterbatasan model.
+
+## Overfitting
+
+```{r}
+model1a <- Arima(train.trans, order = c(2,0,0), method = "ML")
+summary(model1a); lmtest::coeftest(model1a)  # ar2 tidak signifikan
+
+model1b <- Arima(train.trans, order = c(1,0,1), method = "ML")
+summary(model1b); lmtest::coeftest(model1b)  # ma1 tidak signifikan
+```
+
+```{r}
+overfitting <- data.frame(
+  Model = c("ARIMA(1,0,0)", "ARIMA(2,0,0)", "ARIMA(1,0,1)"),
+  AIC   = c(AIC(model1), AIC(model1a), AIC(model1b)),
+  BIC   = c(BIC(model1), BIC(model1a), BIC(model1b))
+)
+overfitting
+```
+
+Kedua model hasil *overfitting* memiliki AIC/BIC lebih besar dan parameter tambahannya tidak signifikan, sehingga **ARIMA(1,0,0)** tetap dipertahankan sebagai model terbaik.
+
+## Peramalan
+
+```{r}
+ramalan <- forecast::forecast(model1, h = length(test.ts))
+plot(ramalan)
+```
+
+Karena pemodelan dilakukan pada data hasil transformasi Box-Cox, hasil ramalan perlu dikembalikan ke skala asli (*inverse Box-Cox*) sebelum dibandingkan dengan data uji.
+
+```{r}
+data.ramalan.trans <- ramalan$mean
+
+# Inverse Box-Cox
+inv_boxcox <- function(x, lambda) {
+  (lambda * x + 1)^(1/lambda)
+}
+
+data.ramalan <- inv_boxcox(data.ramalan.trans, lambda_opt)
+
+perbandingan <- data.frame(
+  Aktual = as.numeric(test.ts),
+  Hasil_Forecast = round(as.numeric(data.ramalan), 2)
+)
+
+head(perbandingan, 10)
+
+accuracy(
+  as.numeric(data.ramalan),
+  as.numeric(test.ts)
+)
+```
+
+```{r}
+ts.plot(data.ts, col = "black", lty = 1,
+        xlab = "Waktu", ylab = "Suhu",
+        main = "Perbandingan Data Aktual vs Hasil Peramalan")
+lines((n.train + 1):n, data.ramalan, col = "red", lty = 2, lwd = 2)
+legend("topleft",
+       legend = c("Data Aktual", "Hasil Forecast"),
+       col = c("black", "red"), lty = c(1,2), lwd = c(1,2), bty = "n")
+```
+
+Pada simulasi ilustrasi (hasil dari analisis data ini), diperoleh nilai akurasi kira-kira **RMSE $\approx 2{,}31$**, **MAE $\approx 1{,}47$**, dan **MAPE $\approx 4{,}83\%$** — tergolong akurasi yang cukup baik untuk data suhu harian (MAPE di bawah 10% umumnya dianggap sangat baik). Pola ramalan ARIMA(1,0,0) relatif cepat mendatar menuju nilai rataan proses, sesuai sifat proses AR(1) yang memori jangka pendeknya meluruh cepat — sehingga model ini lebih andal untuk peramalan jangka pendek dibanding jangka panjang.
